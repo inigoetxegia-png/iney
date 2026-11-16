@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Iñey">
+<meta name="theme-color" content="#1f3a5f">
+<title>Iñey</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231f3a5f'/%3E%3Ctext x='50' y='68' font-size='56' text-anchor='middle' fill='white' font-family='Georgia'%3Ei%3C/text%3E%3C/svg%3E">
+<style>
+:root{--bg:#eef2f0;--ink:#1b2b34;--mut:#5d6b73;--card:#fff;--me:#1f3a5f;--meink:#fff;--line:#d5ddd9;--acc:#1f3a5f;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141b20;--ink:#e6ecea;--mut:#93a1a8;--card:#1e282e;--me:#4d7cc2;--meink:#fff;--line:#2b373e;--acc:#4d7cc2}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:17px/1.45 ui-rounded,-apple-system,"Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column}
+header{padding:14px 18px 10px;border-bottom:1px solid var(--line)}
+h1{margin:0;font:600 26px/1 Georgia,"Times New Roman",serif}
+header p{margin:4px 0 0;color:var(--mut);font-size:14px}
+#chat{flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:10px}
+.m{max-width:86%;padding:10px 14px;border-radius:18px;white-space:pre-wrap;overflow-wrap:anywhere}
+.u{align-self:flex-end;background:var(--me);color:var(--meink);border-bottom-right-radius:5px}
+.a{align-self:flex-start;background:var(--card);border:1px solid var(--line);border-bottom-left-radius:5px}
+#start{margin:auto;text-align:center;max-width:320px}
+#start p{color:var(--mut);font-size:15px}
+button{font:inherit;border:0;border-radius:14px;background:var(--acc);color:#fff;padding:12px 20px;cursor:pointer}
+button:disabled{opacity:.5}
+button:focus-visible,textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+#bar{height:6px;background:var(--line);border-radius:3px;margin-top:14px;overflow:hidden;display:none}
+#bar i{display:block;height:100%;width:0;background:var(--acc)}
+#st{font-size:14px;color:var(--mut);margin-top:8px;min-height:20px}
+form{display:none;gap:8px;padding:10px 12px;border-top:1px solid var(--line);align-items:flex-end}
+textarea{flex:1;font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 14px;resize:none;max-height:120px}
+</style>
+</head>
+<body>
+<header><h1>Iñey</h1><p>Tu asistente privado. Funciona en tu móvil.</p></header>
+<div id="chat">
+  <div id="start">
+    <p>La primera vez descarga el modelo (unos 1,5 GB). Conéctate a wifi. Después queda guardado en tu móvil.</p>
+    <button id="go">Descargar y empezar</button>
+    <div id="bar"><i></i></div>
+    <div id="st"></div>
+  </div>
+</div>
+<form id="f">
+  <textarea id="q" rows="1" placeholder="Escribe tu duda…" enterkeyhint="send"></textarea>
+  <button id="s" type="submit">Enviar</button>
+</form>
+<script type="module">
+import * as webllm from "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm";
+
+const MODEL = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
+const SYSTEM = "Eres Iñey, un asistente personal amable y muy útil. SIEMPRE respondes en español, de forma clara y breve. Puedes ayudar con cualquier duda, sobre todo con cocina (recetas, trucos, sustituciones), salud (información general), estudios (explicar temas, resumir, preparar exámenes) y trabajo (redactar correos, organizar tareas, ideas). Nunca digas que no puedes ayudar: si la pregunta es vaga, explica en qué puedes ayudar o pide más detalles. Si no estás seguro de algo, lo dices. En salud das información general y recomiendas consultar a un profesional cuando sea importante.";
+
+const $ = id => document.getElementById(id);
+const chat = $("chat"), st = $("st"), bar = $("bar");
+let engine, busy = false;
+const history = [
+  { role: "system", content: SYSTEM },
+  { role: "user", content: "¿En qué me puedes ayudar?" },
+  { role: "assistant", content: "Te puedo ayudar con muchas cosas:\n• Cocina: recetas, trucos y qué cocinar con lo que tengas.\n• Salud: información general y hábitos.\n• Estudios: explicarte temas, resumirlos o prepararte preguntas.\n• Trabajo: redactar correos, organizar tareas o dar ideas.\n\nCuéntame tu duda y lo vemos juntos." }
+];
+
+function add(cls, text) {
+  const d = document.createElement("div");
+  d.className = "m " + cls; d.textContent = text;
+  chat.appendChild(d); chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+
+$("go").onclick = async () => {
+  if (!navigator.gpu) {
+    st.textContent = "Este navegador no permite WebGPU. Actualiza iOS y abre la página en Safari.";
+    return;
+  }
+  $("go").disabled = true; bar.style.display = "block";
+  try {
+    engine = await webllm.CreateMLCEngine(MODEL, {
+      initProgressCallback: p => {
+        bar.firstElementChild.style.width = Math.round(p.progress * 100) + "%";
+        st.textContent = p.text;
+      }
+    });
+    $("start").remove();
+    $("f").style.display = "flex";
+    add("a", "Hola, soy Iñey. ¿Qué duda tienes hoy?");
+  } catch (e) {
+    st.textContent = "No se pudo cargar el modelo. Comprueba la conexión y vuelve a intentarlo.";
+    $("go").disabled = false;
+  }
+};
+
+$("f").onsubmit = async ev => {
+  ev.preventDefault();
+  const t = $("q").value.trim();
+  if (!t || busy) return;
+  busy = true; $("s").disabled = true; $("q").value = "";
+  add("u", t); history.push({ role: "user", content: t });
+  const out = add("a", "…");
+  let full = "";
+  try {
+    const stream = await engine.chat.completions.create({ messages: history, stream: true, temperature: 0.6, max_tokens: 600 });
+    for await (const c of stream) {
+      full += c.choices[0]?.delta?.content || "";
+      out.textContent = full; chat.scrollTop = chat.scrollHeight;
+    }
+    history.push({ role: "assistant", content: full });
+  } catch (e) {
+    out.textContent = "Algo falló al responder. Inténtalo de nuevo.";
+    history.pop();
+  }
+  busy = false; $("s").disabled = false; $("q").focus();
+};
+</script>
+</body>
+</html>
